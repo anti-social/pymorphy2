@@ -192,12 +192,12 @@ def _join_lemmas(lemmas, links):
     moves = dict()
 
     def move_lemma(from_id, to_id):
-        lm = lemmas[str(from_id)]
+        lm = lemmas[from_id]
 
         while to_id in moves:
             to_id = moves[to_id]
 
-        lemmas[str(to_id)].extend(lm)
+        lemmas[to_id].extend(lm)
         del lm[:]
         moves[from_id] = to_id
 
