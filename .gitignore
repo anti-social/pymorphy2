@@ -1,11 +1,17 @@
-*.pyc
-*.py~
 
-### emacs ###
-*~
-\#*#
-.ropeproject/
+*.pyc
+*.*~
+*.swp
+Thumbs.db
 
 build/
+docs/_build
 dist/
-*.egg-info/
+
+.idea/
+.rope*
+PYSMELLTAGS
+reports
+
+.tox
+MANIFEST

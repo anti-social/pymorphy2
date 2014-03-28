@@ -4,42 +4,43 @@ from __future__ import absolute_import, unicode_literals, print_function, divisi
 import logging
 import time
 import sys
-import pprint
 import codecs
+import os
 
 import pymorphy2
 from pymorphy2 import opencorpora_dict, test_suite_generator
 from pymorphy2.vendor.docopt import docopt
-from pymorphy2.os_utils import download_bz2, get_mem_usage
+from pymorphy2.utils import download_bz2, get_mem_usage, json_read, json_write
 
 logger = logging.getLogger('pymorphy2')
 logger.addHandler(logging.StreamHandler())
 
+XML_BZ2_URL = "http://opencorpora.org/files/export/dict/dict.opcorpora.xml.bz2"
+
 # ============================ Commands ===========================
 
-def compile_dict(in_filename, out_folder=None, overwrite=False, prediction_options=None):
+def compile_dict(in_filename, out_path=None, overwrite=False, prediction_options=None):
     """
-    Makes a Pymorphy2 dictionary from OpenCorpora .xml dictionary.
+    Make a Pymorphy2 dictionary from OpenCorpora .xml dictionary.
     """
-    if out_folder is None:
-        out_folder = 'dict'
-    opencorpora_dict.to_pymorphy2_format(in_filename, out_folder, overwrite, prediction_options=prediction_options)
+    if out_path is None:
+        out_path = 'dict'
 
-def xml_to_json(in_filename, out_filename):
-    """
-    Parses XML and caches result to json.
-    """
-    opencorpora_dict.xml_dict_to_json(in_filename, out_filename)
+    opencorpora_dict.convert_to_pymorphy2(
+        opencorpora_dict_path = in_filename,
+        out_path = out_path,
+        overwrite = overwrite,
+        prediction_options = prediction_options
+    )
 
-
-def show_dict_mem_usage(dict_path, verbose=False):
+def show_dict_mem_usage(dict_path=None, verbose=False):
     """
-    Shows dictionary memory usage.
+    Show dictionary memory usage.
     """
     initial_mem = get_mem_usage()
     initial_time = time.time()
 
-    dct = opencorpora_dict.load(dict_path)
+    morph = pymorphy2.MorphAnalyzer(dict_path)
 
     end_time = time.time()
     mem_usage = get_mem_usage()
@@ -52,28 +53,24 @@ def show_dict_mem_usage(dict_path, verbose=False):
             from guppy import hpy; hp=hpy()
             logger.debug(hp.heap())
         except ImportError:
-            logger.warning('guppy is not installed, detailed info is not available')
+            logger.warn('guppy is not installed, detailed info is not available')
 
-def show_dict_meta(dict_path):
-    dct = opencorpora_dict.load(dict_path)
-    for key, value in dct.meta.items():
+
+def show_dict_meta(dict_path=None):
+    morph = pymorphy2.MorphAnalyzer(dict_path)
+
+    for key, value in morph.dictionary.meta.items():
         logger.info("%s: %s", key, value)
 
 
 def make_test_suite(dict_filename, out_filename, word_limit=100):
-    """
-    Makes a test suite from (unparsed) OpenCorpora dictionary.
-    """
+    """ Make a test suite from (unparsed) OpenCorpora dictionary. """
     return test_suite_generator.make_test_suite(
         dict_filename, out_filename, word_limit=int(word_limit))
 
 
-XML_BZ2_URL = "http://opencorpora.org/files/export/dict/dict.opcorpora.xml.bz2"
-
-def download_xml(out_filename, verbose):
-    """
-    Downloads an updated XML from OpenCorpora
-    """
+def download_dict_xml(out_filename, verbose):
+    """ Download an updated dictionary XML from OpenCorpora """
     def on_chunk():
         if verbose:
             sys.stdout.write('.')
@@ -85,10 +82,9 @@ def download_xml(out_filename, verbose):
 
     logger.info('\nDone.')
 
-def _parse(dict_path, in_filename, out_filename):
-    from pymorphy2 import tagger
-    morph = pymorphy2.tagger.Morph.load(dict_path)
 
+def _parse(dict_path, in_filename, out_filename):
+    morph = pymorphy2.MorphAnalyzer(dict_path)
     with codecs.open(in_filename, 'r', 'utf8') as in_file:
         with codecs.open(out_filename, 'w', 'utf8') as out_file:
             for line in in_file:
@@ -98,35 +94,84 @@ def _parse(dict_path, in_filename, out_filename):
                 out_file.write(word + ": " +parse_str + "\n")
 
 
+def download_corpus_xml(out_filename):
+    from opencorpora.cli import _download, FULL_CORPORA_URL_BZ2
+    return _download(
+        out_file=out_filename,
+        decompress=True,
+        disambig=False,
+        url=FULL_CORPORA_URL_BZ2,
+        verbose=True
+    )
+
+
+def estimate_tag_cpd(corpus_filename, out_path, min_word_freq, update_meta=True):
+    from pymorphy2.opencorpora_dict.probability import (
+        estimate_conditional_tag_probability, build_cpd_dawg)
+
+    m = pymorphy2.MorphAnalyzer(out_path, probability_estimator_cls=None)
+
+    logger.info("Estimating P(t|w) from %s" % corpus_filename)
+    cpd, cfd = estimate_conditional_tag_probability(m, corpus_filename)
+
+    logger.info("Encoding P(t|w) as DAWG")
+    d = build_cpd_dawg(m, cpd, int(min_word_freq))
+    dawg_filename = os.path.join(out_path, 'p_t_given_w.intdawg')
+    d.save(dawg_filename)
+
+    if update_meta:
+        logger.info("Updating meta information")
+        meta_filename = os.path.join(out_path, 'meta.json')
+        meta = json_read(meta_filename)
+        meta.extend([
+            ('P(t|w)', True),
+            ('P(t|w)_unique_words', len(cpd.conditions())),
+            ('P(t|w)_outcomes', cfd.N()),
+            ('P(t|w)_min_word_freq', int(min_word_freq)),
+        ])
+        json_write(meta_filename, meta)
+
+    logger.info('\nDone.')
+
+
 # =============================================================================
 
-DOC ="""
+# Hacks are here to make docstring compatible with both
+# docopt and sphinx.ext.autodoc.
 
-Pymorphy2 is a Russian POS tagger and inflection engine.
+head = """
 
-Usage:
-    pymorphy dict compile <IN_FILE> [--out <PATH>] [--force] [--verbose] [--max_forms_per_class <NUM>] [--min_ending_freq <NUM>] [--min_paradigm_popularity <NUM>]
-    pymorphy dict xml2json <IN_XML_FILE> <OUT_JSON_FILE> [--verbose]
-    pymorphy dict download [--verbose]
+Pymorphy2 is a morphological analyzer / inflection engine for Russian language.
+"""
+__doc__ ="""
+Usage::
+
+    pymorphy dict compile <DICT_XML> [--out <PATH>] [--force] [--verbose] [--min_ending_freq <NUM>] [--min_paradigm_popularity <NUM>] [--max_suffix_length <NUM>]
     pymorphy dict download_xml <OUT_FILE> [--verbose]
     pymorphy dict mem_usage [--dict <PATH>] [--verbose]
-    pymorphy dict make_test_suite <IN_FILE> <OUT_FILE> [--limit <NUM>] [--verbose]
+    pymorphy dict make_test_suite <XML_FILE> <OUT_FILE> [--limit <NUM>] [--verbose]
     pymorphy dict meta [--dict <PATH>]
+    pymorphy prob download_xml <OUT_FILE> [--verbose]
+    pymorphy prob estimate_cpd <CORPUS_XML> [--out <PATH>] [--min_word_freq <NUM>]
     pymorphy _parse <IN_FILE> <OUT_FILE> [--dict <PATH>] [--verbose]
     pymorphy -h | --help
     pymorphy --version
 
-Options:
+Options::
+
     -v --verbose                        Be more verbose
     -f --force                          Overwrite target folder
     -o --out <PATH>                     Output folder name [default: dict]
     --limit <NUM>                       Min. number of words per gram. tag [default: 100]
     --min_ending_freq <NUM>             Prediction: min. number of suffix occurances [default: 2]
-    --min_paradigm_popularity <NUM>     Prediction: min. number of lemmas for the paradigm [default: 3]
-    --max_forms_per_class <NUM>         Prediction: max. number of word forms per part of speech [default: 1]
-    --dict <PATH>                       Dictionary folder path [default: dict]
+    --min_paradigm_popularity <NUM>     Prediction: min. number of lexemes for the paradigm [default: 3]
+    --max_suffix_length <NUM>           Prediction: max. length of prediction suffixes [default: 5]
+    --min_word_freq <NUM>               P(t|w) estimation: min. word count in source corpus [default: 1]
+    --dict <PATH>                       Dictionary folder path
 
 """
+DOC = head + __doc__.replace('::\n', ':')
+
 
 def main():
     """
@@ -139,6 +184,8 @@ def main():
     else:
         logger.setLevel(logging.INFO)
 
+    logger.debug(args)
+
     if args['_parse']:
         return _parse(args['--dict'], args['<IN_FILE>'], args['<OUT_FILE>'])
 
@@ -146,20 +193,21 @@ def main():
         if args['compile']:
             prediction_options = dict(
                 (key, int(args['--'+key]))
-                for key in ('max_forms_per_class', 'min_ending_freq', 'min_paradigm_popularity')
+                for key in ('min_ending_freq', 'min_paradigm_popularity', 'max_suffix_length')
             )
-            return compile_dict(args['<IN_FILE>'], args['--out'], args['--force'], prediction_options)
-        elif args['xml2json']:
-            return xml_to_json(args['<IN_XML_FILE>'], args['<OUT_JSON_FILE>'])
+            return compile_dict(args['<DICT_XML>'], args['--out'], args['--force'], prediction_options)
         elif args['mem_usage']:
-            return show_dict_mem_usage(args['--dict'] or 'dict', args['--verbose'])
+            return show_dict_mem_usage(args['--dict'], args['--verbose'])
         elif args['meta']:
-            return show_dict_meta(args['--dict'] or 'dict')
+            return show_dict_meta(args['--dict'])
         elif args['make_test_suite']:
-            return make_test_suite(args['<IN_FILE>'], args['<OUT_FILE>'], int(args['--limit']))
+            return make_test_suite(args['<XML_FILE>'], args['<OUT_FILE>'], int(args['--limit']))
         elif args['download_xml']:
-            return download_xml(args['<OUT_FILE>'], args['--verbose'])
-        elif args['download']:
-            raise NotImplementedError()
+            return download_dict_xml(args['<OUT_FILE>'], args['--verbose'])
 
-    logger.debug(args)
+    elif args['prob']:
+        if args['download_xml']:
+            return download_corpus_xml(args['<OUT_FILE>'])
+        elif args['estimate_cpd']:
+            return estimate_tag_cpd(args['<CORPUS_XML>'], args['--out'], args['--min_word_freq'])
+

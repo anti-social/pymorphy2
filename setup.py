@@ -11,7 +11,7 @@ for cmd in ('egg_info', 'develop'):
 
 def get_version():
     with open("pymorphy2/version.py", "rt") as f:
-        return f.readline().split("=")[1].strip(' "')
+        return f.readline().split("=")[1].strip(' "\n')
 
 setup(
     name = 'pymorphy2',
@@ -21,24 +21,27 @@ setup(
     url = 'https://github.com/kmike/pymorphy2/',
 
     description = 'Morphological analyzer (POS tagger + inflection engine) for Russian language.',
-    long_description = open('README.rst').read() + open('docs/CHANGES.rst').read(),
+    long_description = open('README.rst').read(),
 
     license = 'MIT license',
-    packages = ['pymorphy2', 'pymorphy2.vendor'],
+    packages = [
+        'pymorphy2',
+        'pymorphy2.units',
+        'pymorphy2.vendor',
+        'pymorphy2.opencorpora_dict',
+    ],
     scripts=['bin/pymorphy'],
-    requires=['dawg_python (>= 0.5)'],
+    requires=['dawg_python (>= 0.7)', 'pymorphy2_dicts (>=2.4, <3.0)'],
 
 #    cmdclass = {'build_ext': build_ext},
-#    ext_modules = [Extension("pymorphy2.tagger", ["pymorphy2/tagger.py"])],
+#    ext_modules = [Extension("pymorphy2.analyzer", ["pymorphy2/analyzer.py"])],
 
     classifiers=[
-          'Development Status :: 2 - Pre-Alpha',
+          'Development Status :: 3 - Alpha',
           'Intended Audience :: Developers',
           'Intended Audience :: Science/Research',
           'License :: OSI Approved :: MIT License',
           'Natural Language :: Russian',
-          'Natural Language :: English',
-          'Natural Language :: German',
           'Programming Language :: Python',
           'Programming Language :: Python :: 2',
           'Programming Language :: Python :: 2.6',
